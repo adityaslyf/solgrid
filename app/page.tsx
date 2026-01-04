@@ -1,65 +1,115 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import { GameBoard } from '@/components/game/game-board';
+import { Button } from '@/components/ui/button';
+import { Wallet, Info, Grid3x3 } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 export default function Home() {
+  const [isConnected, setIsConnected] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  // Mock wallet connection
+  const handleConnect = () => {
+    setIsConnected(true);
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="min-h-screen flex flex-col relative overflow-hidden">
+        {/* Background Gradients */}
+        <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-primary/20 blur-[120px] rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none" />
+        <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-secondary/20 blur-[120px] rounded-full translate-x-1/2 translate-y-1/2 pointer-events-none" />
+
+        {/* Navbar */}
+        <header className="w-full h-20 flex items-center justify-between px-6 md:px-12 z-50 glass-panel border-b border-white/5 fixed top-0 left-0 right-0">
+            <div className="flex items-center gap-2">
+                <Grid3x3 className="w-8 h-8 text-primary" />
+                <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary">
+                    SolGrid
+                </span>
+            </div>
+
+            <div className="flex items-center gap-4">
+                <Button variant="ghost" size="sm" className="hidden md:flex gap-2">
+                    <Info className="w-4 h-4" /> How to Play
+                </Button>
+                <Button 
+                    variant={isConnected ? "outline" : "primary"} 
+                    onClick={handleConnect}
+                    className="min-w-[140px]"
+                >
+                    <Wallet className="w-4 h-4 mr-2" />
+                    {isConnected ? "0x12...34ABS" : "Connect Wallet"}
+                </Button>
+            </div>
+        </header>
+
+        {/* Main Content */}
+        <div className="flex-1 pt-24 pb-12 px-6 flex flex-col items-center justify-center z-10">
+            {!isPlaying ? (
+                <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex flex-col items-center text-center max-w-2xl space-y-8"
+                >
+                    <div className="space-y-4">
+                        <span className="inline-block py-1 px-3 rounded-full bg-white/5 border border-white/10 text-xs font-medium text-primary">
+                            SOLANA POWERED
+                        </span>
+                        <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-white leading-tight">
+                            Strategic <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">Dots & Boxes</span>
+                        </h1>
+                        <p className="text-lg text-muted-foreground max-w-lg mx-auto">
+                            Challenge opponents in the classic game of strategy reimagined for the blockchain. Claim boxes, earn points, and take the grid.
+                        </p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
+                        <Button 
+                            size="lg" 
+                            variant="primary" 
+                            onClick={() => setIsPlaying(true)}
+                            className="bg-gradient-to-r from-primary to-green-600 hover:from-primary/90 hover:to-green-600/90 shadow-[0_0_40px_-10px_hsl(var(--primary)/0.6)]"
+                        >
+                            Start Game
+                        </Button>
+                        <Button size="lg" variant="secondary" className="bg-white/5 hover:bg-white/10 border-white/10">
+                            Create Private Room
+                        </Button>
+                    </div>
+
+                    {/* Stats or Feature highlights */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-8 mt-12 pt-12 border-t border-white/5 w-full">
+                        <div className="flex flex-col items-center">
+                            <span className="text-3xl font-bold text-white">4x4</span>
+                            <span className="text-sm text-muted-foreground">Grid Size</span>
+                        </div>
+                        <div className="flex flex-col items-center">
+                            <span className="text-3xl font-bold text-white">Fast</span>
+                            <span className="text-sm text-muted-foreground">Turn Based</span>
+                        </div>
+                         <div className="flex flex-col items-center col-span-2 md:col-span-1">
+                            <span className="text-3xl font-bold text-white">0%</span>
+                            <span className="text-sm text-muted-foreground">Platform Fee</span>
+                        </div>
+                    </div>
+                </motion.div>
+            ) : (
+                <motion.div 
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="w-full flex flex-col items-center"
+                >
+                    <div className="mb-8 flex items-center gap-4">
+                         <Button variant="ghost" onClick={() => setIsPlaying(false)} className="text-muted-foreground hover:text-white">
+                            ← Back to Menu
+                         </Button>
+                    </div>
+                    <GameBoard />
+                </motion.div>
+            )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    </main>
   );
 }
