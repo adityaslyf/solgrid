@@ -1,10 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { Button } from '../ui/button';
-import { Trophy, RefreshCw } from 'lucide-react';
+import { Trophy, RefreshCw, Zap, ShieldCheck } from 'lucide-react';
+import { useAnchorProgram } from '@/lib/useAnchorProgram';
+import { PublicKey, Keypair, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { AnchorProvider } from '@coral-xyz/anchor';
 
 type Player = 1 | 2;
 type LineId = string; // Format: "h-r-c" (horizontal-row-col) or "v-r-c" (vertical-row-col)
@@ -16,117 +20,236 @@ interface GameState {
   currentPlayer: Player;
   latestLine?: LineId;
   winner: Player | 'draw' | null;
+  isActive: boolean;
 }
 
 const GRID_SIZE = 4; // 4x4 boxes means 5x5 dots
 
 export function GameBoard() {
+  const { publicKey, signTransaction } = useWallet();
+  const program = useAnchorProgram();
+  const [gamePda, setGamePda] = useState<PublicKey | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Session Wallet (Burner Keypair)
+  // We store the secret key in memory (state) for this session.
+  const [sessionKeypair, setSessionKeypair] = useState<Keypair | null>(null);
+
   const [gameState, setGameState] = useState<GameState>({
     lines: new Set(),
     boxes: {},
     scores: { 1: 0, 2: 0 },
     currentPlayer: 1,
+    latestLine: undefined,
     winner: null,
+    isActive: false,
   });
 
   const isLineTaken = (id: LineId) => gameState.lines.has(id);
 
-  const checkBoxes = (lines: Set<LineId>, lastMove: LineId) => {
-    const newBoxes: Record<string, Player> = { ...gameState.boxes };
-    let scoreGained = false;
-    
-    // Parse the move
-    const [type, rStr, cStr] = lastMove.split('-');
-    const r = parseInt(rStr);
-    const c = parseInt(cStr);
+  // Helper: Derived from local state for immediate feedback
+  const syncGameStateFromChain = useCallback(async () => {
+     if (!program || !gamePda) return;
+     try {
+        const account = await program.account.game.fetch(gamePda);
+        
+        const lines = new Set<LineId>();
+        const boxes: Record<string, Player> = {};
+        let scores = { 1: 0, 2: 0 };
+        let currentPlayer: Player = 1;
+        
+        account.boardState.forEach((moveId: string) => {
+             lines.add(moveId);
+             const [type, rStr, cStr] = moveId.split('-');
+             const r = parseInt(rStr);
+             const c = parseInt(cStr);
+             
+             let scoreGained = false;
+             
+             const boxesToCheck: string[] = [];
+             if (type === 'h') {
+                if (r < GRID_SIZE) boxesToCheck.push(`${r}-${c}`);
+                if (r > 0) boxesToCheck.push(`${r - 1}-${c}`);
+             } else {
+                if (c < GRID_SIZE) boxesToCheck.push(`${r}-${c}`);
+                if (c > 0) boxesToCheck.push(`${r}-${c - 1}`);
+             }
 
-    // Potential boxes to check depend on the line type
-    // If we placed a Horizontal line at r,c:
-    // It could be the TOP of box (r, c)
-    // It could be the BOTTOM of box (r-1, c)
-    const boxesToCheck: string[] = [];
+             boxesToCheck.forEach(boxKey => {
+                 if (boxes[boxKey]) return;
+                 const [br, bc] = boxKey.split('-').map(Number);
+                 const top = `h-${br}-${bc}`;
+                 const bottom = `h-${br+1}-${bc}`;
+                 const left = `v-${br}-${bc}`;
+                 const right = `v-${br}-${bc+1}`;
+                 
+                 if (lines.has(top) && lines.has(bottom) && lines.has(left) && lines.has(right)) {
+                     boxes[boxKey] = currentPlayer;
+                     scoreGained = true;
+                 }
+             });
 
-    if (type === 'h') {
-        // Horizontal line at row r, col c connects (r,c) to (r, c+1)
-        // This line is the Top of box(r, c)
-        if (r < GRID_SIZE) boxesToCheck.push(`${r}-${c}`);
-        // This line is the Bottom of box(r-1, c)
-        if (r > 0) boxesToCheck.push(`${r - 1}-${c}`);
-    } else {
-        // Vertical line at row r, col c connects (r,c) to (r+1,c)
-        // This line is the Left of box(r, c)
-        if (c < GRID_SIZE) boxesToCheck.push(`${r}-${c}`);
-        // This line is the Right of box(r, c-1)
-        if (c > 0) boxesToCheck.push(`${r}-${c - 1}`);
+             if (scoreGained) {
+                 scores = { 
+                     1: Object.values(boxes).filter(p => p === 1).length,
+                     2: Object.values(boxes).filter(p => p === 2).length
+                 };
+             } else {
+                 currentPlayer = currentPlayer === 1 ? 2 : 1;
+             }
+        });
+
+        let winner: Player | 'draw' | null = null;
+        if (Object.keys(boxes).length === GRID_SIZE * GRID_SIZE) {
+             winner = scores[1] > scores[2] ? 1 : scores[2] > scores[1] ? 2 : 'draw';
+        }
+
+        setGameState({
+            lines,
+            boxes,
+            scores,
+            currentPlayer,
+            latestLine: account.boardState[account.boardState.length - 1],
+            winner,
+            isActive: true
+        });
+
+     } catch (e) {
+         console.error("Failed to fetch game:", e);
+     }
+  }, [program, gamePda]);
+
+  // Polling
+  useEffect(() => {
+      if (!gamePda) return;
+      const interval = setInterval(syncGameStateFromChain, 2000);
+      return () => clearInterval(interval);
+  }, [gamePda, syncGameStateFromChain]);
+
+
+  const initializeGame = async () => {
+    if (!program || !publicKey || !signTransaction) return;
+    setLoading(true);
+    setError(null);
+    try {
+        // 1. Generate Session Wallet (Burner)
+        const session = Keypair.generate();
+        setSessionKeypair(session);
+        console.log("Session Wallet Generated:", session.publicKey.toBase58());
+
+        // For simplicity in this demo, P2 is the Session Wallet so it can act "autonomously"
+        // In a real P2P match, both players would have their own session wallets.
+        // Or if we play against ourselves, we set P2 = Session.
+        const playerTwo = session.publicKey; 
+        
+        // P1 is the Main Wallet (needs to sign to fund) and start.
+        // But if we want P1 to ALSO auto-sign, we should eventually set P1 = session too? 
+        // For this demo: P1 = Main Wallet (Sign Init), P2 = Session Wallet (Auto Sign).
+        // Wait, the goal is *P1* (You) not getting popups.
+        // So actually, we want the Game to think *You* are the Session Wallet.
+        
+        // BETTER PLAN:
+        // We initialize the game where P1 = Session Wallet, P2 = Session Wallet.
+        // But the *payer* is the Main Wallet.
+        // This way, the Session Wallet controls BOTH turns (Simulated Self-Play).
+        
+        const [pda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("game"), session.publicKey.toBuffer(), session.publicKey.toBuffer()],
+            program.programId
+        );
+
+        // 2. Fund Session Wallet & Init Game (Atomic Transaction)
+        // Move 0.05 SOL to session wallet for fees
+        const transferIx = SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: session.publicKey,
+            lamports: 0.05 * LAMPORTS_PER_SOL,
+        });
+
+        const initIx = await program.methods.initializeGame(session.publicKey)
+        .accounts({
+            playerOne: session.publicKey, // Session is P1
+            playerTwo: session.publicKey, // Session is P2 (Self Play)
+            game: pda,
+        })
+        .instruction();
+
+        // 3. Construct and Sign Transaction
+        const tx = new Transaction().add(transferIx).add(initIx);
+        tx.recentBlockhash = (await program.provider.connection.getLatestBlockhash()).blockhash;
+        tx.feePayer = publicKey;
+
+        // Partially sign with Session Key (since it's a signer in initGame as P1)
+        tx.partialSign(session);
+        
+        // Final sign with Main Wallet (Payer)
+        const signedTx = await signTransaction(tx);
+        
+        // Send
+        const sig = await program.provider.connection.sendRawTransaction(signedTx.serialize());
+        await program.provider.connection.confirmTransaction(sig);
+
+        setGamePda(pda);
+        await syncGameStateFromChain();
+
+    } catch (err: any) {
+        console.error(err);
+        setError(err.message || "Failed to start game");
+    } finally {
+        setLoading(false);
     }
-
-    const currentPlr = gameState.currentPlayer;
-
-    boxesToCheck.forEach(boxKey => {
-      if (newBoxes[boxKey]) return; // Already taken
-
-      const [br, bc] = boxKey.split('-').map(Number);
-      // Box(br, bc) is formed by:
-      // Top: h-br-bc
-      // Bottom: h-(br+1)-bc
-      // Left: v-br-bc
-      // Right: v-br-(bc+1)
-      const top = `h-${br}-${bc}`;
-      const bottom = `h-${br + 1}-${bc}`;
-      const left = `v-${br}-${bc}`;
-      const right = `v-${br}-${bc + 1}`;
-
-      if (lines.has(top) && lines.has(bottom) && lines.has(left) && lines.has(right)) {
-        newBoxes[boxKey] = currentPlr;
-        scoreGained = true;
-      }
-    });
-
-    return { newBoxes, scoreGained };
   };
 
-  const handleLineClick = (id: LineId) => {
-    if (gameState.winner || isLineTaken(id)) return;
+  const handleLineClick = async (id: LineId) => {
+    if (!program || !gamePda || loading || isLineTaken(id) || gameState.winner) return;
 
-    const newLines = new Set(gameState.lines);
-    newLines.add(id);
-
-    const { newBoxes, scoreGained } = checkBoxes(newLines, id);
-
-    let nextPlayer = gameState.currentPlayer;
-    let newScores = { ...gameState.scores };
-
-    if (scoreGained) {
-      const p1Score = Object.values(newBoxes).filter(p => p === 1).length;
-      const p2Score = Object.values(newBoxes).filter(p => p === 2).length;
-      newScores = { 1: p1Score, 2: p2Score };
-      
-      if (p1Score + p2Score === GRID_SIZE * GRID_SIZE) {
-        setGameState(prev => ({
-          ...prev,
-          lines: newLines,
-          boxes: newBoxes,
-          scores: newScores,
-          latestLine: id,
-          winner: p1Score > p2Score ? 1 : p2Score > p1Score ? 2 : 'draw'
-        }));
+    if (!sessionKeypair) {
+        setError("No session wallet found. Please restart game.");
         return;
-      }
-    } else {
-      nextPlayer = nextPlayer === 1 ? 2 : 1;
     }
+    
+    // Optimistic UI update
+    // We can't really do full optimistic UI without duplicating logic, 
+    // but we can at least show loading state.
+    setLoading(true);
 
-    setGameState({
-      lines: newLines,
-      boxes: newBoxes,
-      scores: newScores,
-      currentPlayer: nextPlayer,
-      latestLine: id,
-      winner: null,
-    });
+    try {
+        // AUTO-SIGNING with Session Keypair
+        // We create a custom provider momentarily or just build tx manually.
+        // Easiest: Build instruction -> Sign with Keypair -> Send.
+        
+        const ix = await program.methods.makeMove(id)
+        .accounts({
+            game: gamePda,
+            player: sessionKeypair.publicKey // Session wallet is the player
+        })
+        .instruction();
+
+        const tx = new Transaction().add(ix);
+        tx.recentBlockhash = (await program.provider.connection.getLatestBlockhash()).blockhash;
+        tx.feePayer = sessionKeypair.publicKey; // Session pays gas! (It has funds)
+
+        tx.sign(sessionKeypair);
+
+        const sig = await program.provider.connection.sendRawTransaction(tx.serialize());
+        // await program.provider.connection.confirmTransaction(sig); 
+        // Don't await verification for UI happiness? 
+        // No, await it to ensure sync is correct, but it's fast on localnet.
+        await program.provider.connection.confirmTransaction(sig);
+
+        await syncGameStateFromChain();
+    } catch (err: any) {
+        console.error(err);
+        setError("Move failed: " + err.message);
+    } finally {
+        setLoading(false);
+    }
   };
 
   const resetGame = () => {
+    setGamePda(null);
+    setSessionKeypair(null);
     setGameState({
       lines: new Set(),
       boxes: {},
@@ -134,6 +257,7 @@ export function GameBoard() {
       currentPlayer: 1,
       latestLine: undefined,
       winner: null,
+      isActive: false
     });
   };
 
@@ -149,8 +273,8 @@ export function GameBoard() {
         for (let c = 0; c < dotsCount; c++) {
             // 1. The Dot
             items.push(
-                <div key={`dot-${r}-${c}`} className="relative z-20 flex items-center justify-center w-4 h-4">
-                    <div className="w-3 h-3 bg-muted-foreground/50 rounded-full hover:bg-white transition-colors duration-300" />
+                <div key={`dot-${r}-${c}`} className="relative z-20 flex items-center justify-center w-full h-full">
+                    <div className="w-3 h-3 bg-muted-foreground/50 rounded-full hover:bg-white transition-colors duration-300 shadow-[0_0_10px_rgba(0,0,0,0.5)]" />
                 </div>
             );
 
@@ -163,10 +287,13 @@ export function GameBoard() {
                     <div 
                         key={hLineId}
                         onClick={() => handleLineClick(hLineId)}
-                        className="relative h-4 flex items-center justify-center cursor-pointer group"
+                        className={cn(
+                            "relative h-full flex items-center justify-center cursor-pointer group",
+                            loading && "pointer-events-none opacity-50"
+                        )}
                     >
                         {/* Interactive Hitbox */}
-                        <div className="absolute inset-x-0 -inset-y-2 z-10 bg-transparent" />
+                        <div className="absolute inset-x-0 -inset-y-4 z-10 bg-transparent" />
                         
                         {/* Visible Line */}
                         <div className={cn(
@@ -192,10 +319,13 @@ export function GameBoard() {
                     <div 
                         key={vLineId}
                         onClick={() => handleLineClick(vLineId)}
-                        className="relative w-4 flex justify-center cursor-pointer group py-0"
+                         className={cn(
+                            "relative w-full flex justify-center cursor-pointer group",
+                            loading && "pointer-events-none opacity-50"
+                        )}
                     >
                          {/* Interactive Hitbox */}
-                         <div className="absolute inset-y-0 -inset-x-2 z-10 bg-transparent" />
+                         <div className="absolute inset-y-0 -inset-x-4 z-10 bg-transparent" />
 
                         {/* Visible Line */}
                         <div className={cn(
@@ -224,7 +354,6 @@ export function GameBoard() {
                                             : "bg-secondary/20 shadow-[0_0_20px_hsl(var(--secondary)/0.25)] border border-secondary/30"
                                     )}
                                 >
-                                  {/* Optional: Owner Icon or Initial */}
                                   <span className={cn("font-bold text-2xl select-none", owner === 1 ? "text-primary dark:text-primary" : "text-secondary dark:text-secondary")}>
                                     {owner === 1 ? "P1" : "P2"}
                                   </span>
@@ -238,6 +367,44 @@ export function GameBoard() {
     }
     return items;
   };
+
+  // If not connected or not active, show Start View
+  if (!gamePda && !gameState.isActive) {
+      return (
+        <div className="flex flex-col items-center justify-center p-8 space-y-6 max-w-md mx-auto glass-card rounded-2xl">
+            <Trophy className="w-16 h-16 text-primary mb-4" />
+            <h2 className="text-2xl font-bold text-white text-center">Ready to Play?</h2>
+            {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+            
+            {!publicKey ? (
+                 <p className="text-muted-foreground text-center">Connect your wallet in the navigation bar to start.</p>
+            ) : (
+                <div className="space-y-4 w-full">
+                    <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg flex items-start gap-4 text-left">
+                        <ShieldCheck className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                            <p className="font-semibold text-primary text-sm">Session Wallet Enabled</p>
+                            <p className="text-xs text-muted-foreground">
+                                We will create a temporary wallet and fund it (0.05 SOL) to 
+                                <span className="text-white font-medium"> auto-sign your moves</span>. 
+                                You only approve one transaction to start.
+                            </p>
+                        </div>
+                    </div>
+
+                     <Button 
+                        size="lg" 
+                        className="w-full" 
+                        onClick={initializeGame}
+                        isLoading={loading}
+                    >
+                         <Zap className="mr-2 w-4 h-4" /> Start Instant Match
+                    </Button>
+                </div>
+            )}
+        </div>
+      );
+  }
 
   return (
     <div className="flex flex-col items-center w-full max-w-4xl mx-auto space-y-8 p-6">
@@ -261,7 +428,12 @@ export function GameBoard() {
                     </span>
                 </motion.div>
             ) : (
-                <div className="text-sm font-medium text-muted-foreground/50 tracking-[0.2em]">VS</div>
+                <div className="flex flex-col items-center gap-2">
+                     <span className="text-xs font-mono text-muted-foreground bg-white/5 px-2 py-1 rounded">
+                         Session Mode
+                     </span>
+                     <div className="text-sm font-medium text-muted-foreground/50 tracking-[0.2em]">VS</div>
+                </div>
             )}
         </div>
 
@@ -272,12 +444,17 @@ export function GameBoard() {
       </div>
 
       {/* The Grid Board - CSS GRID IMPLEMENTATION */}
-      <div className="p-8 rounded-2xl bg-black/60 border border-white/10 shadow-2xl backdrop-blur-xl">
+      <div className="p-8 rounded-2xl bg-black/60 border border-white/10 shadow-2xl backdrop-blur-xl relative">
+        {loading && (
+             <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center rounded-2xl">
+                 <RefreshCw className="w-10 h-10 text-primary animate-spin" />
+             </div>
+        )}
         <div 
           style={{
              display: 'grid',
-             gridTemplateColumns: `max-content repeat(${GRID_SIZE}, 100px max-content)`, // 16px dot, 80px line, ...
-             gridTemplateRows: `max-content repeat(${GRID_SIZE}, 100px max-content)`,   // 16px dot, 80px line, ...
+             gridTemplateColumns: `16px repeat(${GRID_SIZE}, 100px 16px)`,
+             gridTemplateRows: `16px repeat(${GRID_SIZE}, 100px 16px)`,
              gap: '0px'
           }}
         >
@@ -285,9 +462,14 @@ export function GameBoard() {
         </div>
       </div>
 
+       { /* Status / Error Bar */ }
+       <div className="h-6">
+           {error && <span className="text-red-500 text-sm animate-pulse">{error}</span>}
+       </div>
+
        {/* Reset / Actions */}
        <Button variant="glass" onClick={resetGame} className="gap-2 text-muted-foreground hover:text-white border-white/5 hover:bg-white/5">
-         <RefreshCw className="w-4 h-4" /> Reset Board
+         <RefreshCw className="w-4 h-4" /> Exit Game
        </Button>
     </div>
   );

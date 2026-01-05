@@ -1,19 +1,15 @@
-'use client';
-
+"use client";
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { useState } from 'react';
 import { GameBoard } from '@/components/game/game-board';
 import { Button } from '@/components/ui/button';
-import { Wallet, Info, Grid3x3 } from 'lucide-react';
+import { Info, Grid3x3 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function Home() {
-  const [isConnected, setIsConnected] = useState(false);
+  const { connected } = useWallet();
   const [isPlaying, setIsPlaying] = useState(false);
-
-  // Mock wallet connection
-  const handleConnect = () => {
-    setIsConnected(true);
-  };
 
   return (
     <main className="min-h-screen flex flex-col relative overflow-hidden">
@@ -34,14 +30,16 @@ export default function Home() {
                 <Button variant="ghost" size="sm" className="hidden md:flex gap-2">
                     <Info className="w-4 h-4" /> How to Play
                 </Button>
-                <Button 
-                    variant={isConnected ? "outline" : "primary"} 
-                    onClick={handleConnect}
-                    className="min-w-[140px]"
-                >
-                    <Wallet className="w-4 h-4 mr-2" />
-                    {isConnected ? "0x12...34ABS" : "Connect Wallet"}
-                </Button>
+                {/* Real Wallet Button */}
+                <WalletMultiButton style={{
+                    backgroundColor: 'hsla(142, 70%, 50%, 0.1)',
+                    border: '1px solid hsla(142, 70%, 50%, 0.2)',
+                    color: 'white',
+                    fontFamily: 'var(--font-outfit)',
+                    fontWeight: 600,
+                    borderRadius: '0.5rem',
+                    height: '2.5rem',
+                }} />
             </div>
         </header>
 
