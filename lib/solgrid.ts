@@ -46,18 +46,11 @@ export type Solgrid = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "playerOne"
-              },
-              {
-                "kind": "account",
-                "path": "playerTwo"
+                "kind": "arg",
+                "path": "gameId"
               }
             ]
           }
-        },
-        {
-          "name": "playerTwo"
         },
         {
           "name": "systemProgram",
@@ -66,8 +59,55 @@ export type Solgrid = {
       ],
       "args": [
         {
+          "name": "gameId",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "joinGame",
+      "discriminator": [
+        107,
+        112,
+        18,
+        38,
+        56,
+        173,
+        60,
+        128
+      ],
+      "accounts": [
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "gameId"
+              }
+            ]
+          }
+        },
+        {
           "name": "playerTwo",
-          "type": "pubkey"
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "gameId",
+          "type": "string"
         }
       ]
     },
@@ -132,6 +172,16 @@ export type Solgrid = {
       "code": 6002,
       "name": "moveAlreadyMade",
       "msg": "This move has already been made."
+    },
+    {
+      "code": 6003,
+      "name": "gameAlreadyStarted",
+      "msg": "Game already started."
+    },
+    {
+      "code": 6004,
+      "name": "cannotPlayAgainstSelf",
+      "msg": "Cannot play against yourself (in P2P mode)."
     }
   ],
   "types": [
@@ -169,6 +219,10 @@ export type Solgrid = {
             "type": "u8"
           },
           {
+            "name": "gameId",
+            "type": "string"
+          },
+          {
             "name": "boardState",
             "type": {
               "vec": "string"
@@ -182,6 +236,9 @@ export type Solgrid = {
       "type": {
         "kind": "enum",
         "variants": [
+          {
+            "name": "waitingForOpponent"
+          },
           {
             "name": "active"
           },
